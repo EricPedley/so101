@@ -40,10 +40,12 @@ import torch
 from pathlib import Path
 from isaaclab.utils import configclass
 import isaaclab.envs.mdp as mdp
-from isaaclab.envs import ManagerBasedEnv, ManagerBasedEnvCfg
+from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 
@@ -91,6 +93,12 @@ class ActionsCfg:
 
     joint_efforts = mdp.JointEffortActionCfg(asset_name="robot", joint_names=joint_names, scale=5.0)
 
+@configclass
+class TerminationsCfg:
+    """Termination terms for the MDP."""
+
+    # (1) Time out
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
 @configclass
 class ObservationsCfg:
@@ -127,6 +135,28 @@ class EventCfg:
         },
     )
 
+def reward_fn(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Penalize joint position deviation from a target value."""
+    # extract the used quantities (to enable type-hinting)
+    asset: Articulation = env.scene[asset_cfg.name]
+    # wrap the joint positions to (-pi, pi)
+    return torch.tensor(0.0)
+
+@configclass
+class RewardsCfg:
+    """Reward terms for the MDP."""
+
+    # (1) Constant running reward
+    alive = RewTerm(func=mdp.is_alive, weight=1.0)
+    # (2) Failure penalty
+    terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
+    # (3) Primary task: keep pole upright
+    pole_pos = RewTerm(
+        func=reward_fn,
+        weight=-1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=joint_names)},
+    )
+
 class SO101SceneCfg(InteractiveSceneCfg):
     """Designs the scene by spawning ground plane, light, objects and meshes from usd files."""
     # ground plane
@@ -146,7 +176,7 @@ class SO101SceneCfg(InteractiveSceneCfg):
 
 
 @configclass
-class SO101EnvCfg(ManagerBasedEnvCfg):
+class SO101EnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the cartpole environment."""
 
     # Scene settings
@@ -155,16 +185,20 @@ class SO101EnvCfg(ManagerBasedEnvCfg):
     observations = ObservationsCfg()
     actions = ActionsCfg()
     events = EventCfg()
+    rewards: RewardsCfg = RewardsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
 
     def __post_init__(self):
         """Post initialization."""
         # viewer settings
         self.viewer.eye = [4.5, 0.0, 6.0]
         self.viewer.lookat = [0.0, 0.0, 2.0]
-        # step settings
-        self.decimation = 4  # env step every 4 sim steps: 200Hz / 4 = 50Hz
+        # general settings
+        self.decimation = 2
+        self.episode_length_s = 5
         # simulation settings
-        self.sim.dt = 0.005  # sim step every 5ms: 2
+        self.sim.dt = 1 / 120
+        self.sim.render_interval = self.decimation
 
 
 def main():
@@ -175,7 +209,7 @@ def main():
     env_cfg.sim.device = args_cli.device
     env_cfg.sim.create_stage_in_memory = True
     # setup base environment
-    env = ManagerBasedEnv(cfg=env_cfg)
+    env = ManagerBasedRLEnv(cfg=env_cfg)
 
     # simulate physics
     count = 0
@@ -190,9 +224,9 @@ def main():
             # sample random actions
             joint_efforts = torch.randn_like(env.action_manager.action)
             # step the environment
-            obs, _ = env.step(joint_efforts)
+            obs, rew, terminated, truncated, info = env.step(joint_efforts)
             # print current orientation of pole
-            print("[Env 0]: First joint: ", obs["policy"][0][1].item())
+            print(f"[INFO]: Step {count}, Joint Positions: {obs}, Reward: {rew}, Terminated: {terminated}, Truncated: {truncated}")
             # update counter
             count += 1
 
