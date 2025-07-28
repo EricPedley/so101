@@ -16,6 +16,7 @@ from isaaclab.app import AppLauncher
 
 # create argparser
 parser = argparse.ArgumentParser(description="Tutorial on creating an empty stage.")
+parser.add_argument("--num_envs", type=int, default=16, help="Number of environments to spawn.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -37,9 +38,25 @@ import isaacsim.core.utils.stage as stage_utils
 import torch
 
 from pathlib import Path
-
+from isaaclab.utils import configclass
+import isaaclab.envs.mdp as mdp
+from isaaclab.envs import ManagerBasedEnv, ManagerBasedEnvCfg
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.scene import InteractiveSceneCfg
 
 so101_usd_path = Path(__file__).parent / 'models/SO101/so101_new_calib/so101_new_calib.usd'
+
+joint_names = [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper",
+]
 
 SO101_CONFIG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -53,177 +70,134 @@ SO101_CONFIG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={
-            "shoulder_pan": 0.0,
-            "shoulder_lift": 0.0,
-            "elbow_flex": 0.0,
-            "wrist_flex": 0.0,
-            "wrist_roll": 0.0,
-            "gripper": 0.0,
+            key: 0.0 for key in joint_names
         },
         pos=(0.0, 0.0, 0.0),
     ),
     actuators={
-        "shoulder_pan": ImplicitActuatorCfg(
-            joint_names_expr=["shoulder_pan"],
+        'defualt_config': ImplicitActuatorCfg(
+            joint_names_expr=joint_names,
             effort_limit_sim=100.0,
             velocity_limit_sim=100.0,
             stiffness=10000.0,
             damping=100.0,
-        ),
-        "shoulder_lift": ImplicitActuatorCfg(
-            joint_names_expr=["shoulder_lift"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=100.0,
-            stiffness=10000.0,
-            damping=100.0,
-        ),
-        "elbow_flex": ImplicitActuatorCfg(
-            joint_names_expr=["elbow_flex"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=100.0,
-            stiffness=10000.0,
-            damping=100.0,
-        ),  
-        "wrist_flex": ImplicitActuatorCfg(
-            joint_names_expr=["wrist_flex"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=100.0,
-            stiffness=10000.0,
-            damping=100.0,
-        ),  
-        "wrist_roll": ImplicitActuatorCfg(
-            joint_names_expr=["wrist_roll"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=100.0,
-            stiffness=10000.0,
-            damping=100.0,
-        ),  
-        "gripper": ImplicitActuatorCfg(
-            joint_names_expr=["gripper"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=100.0,
-            stiffness=10000.0,
-            damping=100.0,
-        ),  
-        
+        ) 
     },
 )
 
-def design_scene():
+@configclass
+class ActionsCfg:
+    """Action specifications for the environment."""
+
+    joint_efforts = mdp.JointEffortActionCfg(asset_name="robot", joint_names=joint_names, scale=5.0)
+
+
+@configclass
+class ObservationsCfg:
+    """Observation specifications for the environment."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Observations for policy group."""
+
+        # observation terms (order preserved)
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
+        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    # observation groups
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class EventCfg:
+    """Configuration for events."""
+
+    # on reset
+    reset_cart_position = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=joint_names),
+            "position_range": (0.0, 0.0),
+            "velocity_range": (0.0, 0.0),
+        },
+    )
+
+class SO101SceneCfg(InteractiveSceneCfg):
     """Designs the scene by spawning ground plane, light, objects and meshes from usd files."""
-    # Ground-plane
-    cfg_ground = sim_utils.GroundPlaneCfg()
-    cfg_ground.func("/World/defaultGroundPlane", cfg_ground)
-
-    # spawn distant light
-    cfg_light_distant = sim_utils.DistantLightCfg(
-        intensity=3000.0,
-        color=(0.75, 0.75, 0.75),
+    # ground plane
+    ground = AssetBaseCfg(
+        prim_path="/World/ground",
+        spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
     )
-    cfg_light_distant.func("/World/lightDistant", cfg_light_distant, translation=(1, 0, 10))
 
-    # create a new xform prim for all objects to be spawned under
-    prim_utils.create_prim("/World/Objects", "Xform")
+    # cartpole
+    robot: ArticulationCfg = SO101_CONFIG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # spawn a blue cuboid with deformable body
-    blue_cube_cfg = sim_utils.MeshCuboidCfg(
-        size=(0.2, 0.2, 0.2),
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
+    # lights
+    dome_light = AssetBaseCfg(
+        prim_path="/World/DomeLight",
+        spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
-    blue_cube_cfg.func("/World/Objects/BlueCube", blue_cube_cfg, translation=(0.15, 0.2, 2.0))
 
-    green_cube_cfg = sim_utils.MeshCuboidCfg(
-        size=(0.2, 0.2, 0.2),
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
-    )
-    green_cube_cfg.func("/World/Objects/GreenCube", green_cube_cfg, translation=(0.45, 0.0, 2.0))
 
-    # spawn a usd file of a table into the scene
-    # cfg = sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd")
-    # cfg.func("/World/Objects/Table", cfg, translation=(0.0, 0.0, 1.05))
+@configclass
+class SO101EnvCfg(ManagerBasedEnvCfg):
+    """Configuration for the cartpole environment."""
 
-    origins = [[0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]]
-    # Origin 1
-    prim_utils.create_prim("/World/Origin1", "Xform", translation=origins[0])
-    # Origin 2
-    prim_utils.create_prim("/World/Origin2", "Xform", translation=origins[1])
+    # Scene settings
+    scene = SO101SceneCfg(num_envs=1024, env_spacing=2.5)
+    # Basic settings
+    observations = ObservationsCfg()
+    actions = ActionsCfg()
+    events = EventCfg()
 
-    so101_config = SO101_CONFIG.copy()
-    so101_config.prim_path = "/World/Origin.*/Robot"
-    # cartpole_cfg = CARTPOLE_CFG.copy()
-    # cartpole_cfg.prim_path = "/World/Origin.*/Robot"
-    so101 = Articulation(cfg=so101_config)
+    def __post_init__(self):
+        """Post initialization."""
+        # viewer settings
+        self.viewer.eye = [4.5, 0.0, 6.0]
+        self.viewer.lookat = [0.0, 0.0, 2.0]
+        # step settings
+        self.decimation = 4  # env step every 4 sim steps: 200Hz / 4 = 50Hz
+        # simulation settings
+        self.sim.dt = 0.005  # sim step every 5ms: 2
 
-    scene_entities = {"so101": so101}
-    return scene_entities, origins
-
-def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articulation], origins: torch.Tensor):
-    """Runs the simulation loop."""
-    # Extract scene entities
-    # note: we only do this here for readability. In general, it is better to access the entities directly from
-    #   the dictionary. This dictionary is replaced by the InteractiveScene class in the next tutorial.
-    robot = entities["so101"]
-    # Define simulation stepping
-    sim_dt = sim.get_physics_dt()
-    count = 0
-    # Simulation loop
-    while simulation_app.is_running():
-        # Reset
-        if count % 500 == 0:
-            # reset counter
-            count = 0
-            # reset the scene entities
-            # root state
-            # we offset the root state by the origin since the states are written in simulation world frame
-            # if this is not done, then the robots will be spawned at the (0, 0, 0) of the simulation world
-            root_state = robot.data.default_root_state.clone()
-            root_state[:, :3] += origins
-            robot.write_root_pose_to_sim(root_state[:, :7])
-            robot.write_root_velocity_to_sim(root_state[:, 7:])
-            # set joint positions with some noise
-            joint_pos, joint_vel = robot.data.default_joint_pos.clone(), robot.data.default_joint_vel.clone()
-            joint_pos += torch.rand_like(joint_pos) * 0.1
-            robot.write_joint_state_to_sim(joint_pos, joint_vel)
-            # clear internal buffers
-            robot.reset()
-            print("[INFO]: Resetting robot state...")
-        # Apply random action
-        # -- generate random joint efforts
-        efforts = torch.randn_like(robot.data.joint_pos) * 5.0
-        # -- apply action to the robot
-        robot.set_joint_effort_target(efforts)
-        # -- write data to sim
-        robot.write_data_to_sim()
-        # Perform step
-        sim.step()
-        # Increment counter
-        count += 1
-        # Update buffers
-        robot.update(sim_dt)
 
 def main():
     """Main function."""
+    # parse the arguments
+    env_cfg = SO101EnvCfg()
+    env_cfg.scene.num_envs = args_cli.num_envs
+    env_cfg.sim.device = args_cli.device
+    env_cfg.sim.create_stage_in_memory = True
+    # setup base environment
+    env = ManagerBasedEnv(cfg=env_cfg)
 
-    # Initialize the simulation context
-    sim_cfg = SimulationCfg(dt=0.01)
-    sim = SimulationContext(sim_cfg)
-    # Set main camera
-    sim.set_camera_view([2.5, 2.5, 2.5], [0.0, 0.0, 0.0])
+    # simulate physics
+    count = 0
+    while simulation_app.is_running():
+        with torch.inference_mode():
+            # reset
+            if count % 300 == 0:
+                count = 0
+                env.reset()
+                print("-" * 80)
+                print("[INFO]: Resetting environment...")
+            # sample random actions
+            joint_efforts = torch.randn_like(env.action_manager.action)
+            # step the environment
+            obs, _ = env.step(joint_efforts)
+            # print current orientation of pole
+            print("[Env 0]: First joint: ", obs["policy"][0][1].item())
+            # update counter
+            count += 1
 
-    with stage_utils.use_stage(sim.get_initial_stage()):
-        scene_entities, scene_origins = design_scene()
-        attach_stage_to_usd_context()
-    scene_origins = torch.tensor(scene_origins, device=sim.device)
-
-    # Play the simulator
-    sim.reset()
-    # Now we are ready!
-    print("[INFO]: Setup complete...")
-
-    # Simulate physics
-    run_simulator(sim, scene_entities, scene_origins)
+    # close the environment
+    env.close()
 
 
 if __name__ == "__main__":
