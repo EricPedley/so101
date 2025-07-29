@@ -154,8 +154,7 @@ def reward_fn(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor
     gripper_link_position = asset.data.body_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
     base_link_position = asset.data.body_pos_w[:, base_idx, :]  # Shape: [num_envs, 3]
 
-    # print(f"Gripper link position: {gripper_link_position.shape}")
-    return gripper_link_position[:,0,2]#-torch.linalg.vector_norm(gripper_link_position - base_link_position - torch.tensor([0.0, 0.0, 1.0], device=env.device))
+    return -torch.linalg.vector_norm(gripper_link_position - base_link_position - torch.tensor([0.0, 0.0, 1.0], device=env.device))
 
 @configclass
 class RewardsCfg:
@@ -237,8 +236,8 @@ def main():
     log_dir = os.path.join(log_root_path, run_info)
     new_logger = configure(log_dir, ["stdout", "tensorboard"])
     agent.set_logger(new_logger)
-    checkpoint_callback = CheckpointCallback(save_freq=100, save_path=log_dir, name_prefix="model", verbose=2)
-    agent.learn(total_timesteps=1_000_000, callback=checkpoint_callback, log_interval=1)
+    checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
+    agent.learn(total_timesteps=10_000_000, callback=checkpoint_callback, log_interval=1)
    
     env.close()
 
