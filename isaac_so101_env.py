@@ -49,6 +49,15 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.logger import configure
+from stable_baselines3.common.vec_env import VecNormalize
+
+import datetime
+import os
+from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
+
 so101_usd_path = Path(__file__).parent / 'models/SO101/so101_new_calib/so101_new_calib.usd'
 
 joint_names = [
@@ -211,26 +220,23 @@ def main():
     # setup base environment
     env = ManagerBasedRLEnv(cfg=env_cfg)
 
-    # simulate physics
-    count = 0
-    while simulation_app.is_running():
-        with torch.inference_mode():
-            # reset
-            if count % 300 == 0:
-                count = 0
-                env.reset()
-                print("-" * 80)
-                print("[INFO]: Resetting environment...")
-            # sample random actions
-            joint_efforts = torch.randn_like(env.action_manager.action)
-            # step the environment
-            obs, rew, terminated, truncated, info = env.step(joint_efforts)
-            # print current orientation of pole
-            print(f"[INFO]: Step {count}, Joint Positions: {obs}, Reward: {rew}, Terminated: {terminated}, Truncated: {truncated}")
-            # update counter
-            count += 1
+    env = Sb3VecEnvWrapper(env)
 
-    # close the environment
+
+    # create agent from stable baselines
+    agent = PPO('MlpPolicy', env, verbose=1)
+
+    run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_root_path = os.path.abspath(os.path.join("logs", "sb3", 'so101'))
+    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
+    print(f"Exact experiment name requested from command line: {run_info}")
+    log_dir = os.path.join(log_root_path, run_info)
+    new_logger = configure(log_dir, ["stdout", "tensorboard"])
+    agent.set_logger(new_logger)
+    checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
+    agent.learn(total_timesteps=100_000, callback=checkpoint_callback)
+   
     env.close()
 
 
