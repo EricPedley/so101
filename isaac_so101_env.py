@@ -88,8 +88,8 @@ SO101_CONFIG = ArticulationCfg(
     actuators={
         'defualt_config': ImplicitActuatorCfg(
             joint_names_expr=joint_names,
-            effort_limit_sim=100.0,
-            velocity_limit_sim=100.0,
+            effort_limit_sim=1.0,
+            velocity_limit_sim=1.0,
             stiffness=10000.0,
             damping=100.0,
         ) 
@@ -121,6 +121,16 @@ class ObservationsCfg:
         # observation terms (order preserved)
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
 
+        cube1_pos = ObsTerm(
+            func=mdp.root_pos_w,
+            params={"asset_cfg": SceneEntityCfg("cube1")},
+        )
+
+        cube2_pos = ObsTerm(
+            func=mdp.root_pos_w,
+            params={"asset_cfg": SceneEntityCfg("cube2")},
+        )
+
         def __post_init__(self) -> None:
             self.enable_corruption = False
             self.concatenate_terms = True
@@ -128,6 +138,9 @@ class ObservationsCfg:
     # observation groups
     policy: PolicyCfg = PolicyCfg()
 
+
+x_range = (0, 0.3)
+y_range = (-0.2, 0.2)
 
 @configclass
 class EventCfg:
@@ -143,9 +156,6 @@ class EventCfg:
             "velocity_range": (0.0, 0.0),
         },
     )
-
-    x_range = (0, 0.3)
-    y_range = (-0.2, 0.2)
 
     reset_cube1_position = EventTerm(
         func=mdp.reset_root_state_uniform,
