@@ -26,7 +26,7 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import AssetBaseCfg, Articulation
+from isaaclab.assets import AssetBaseCfg, Articulation, RigidObjectCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sim import SimulationCfg, SimulationContext
 import isaacsim.core.utils.prims as prim_utils
@@ -144,6 +144,37 @@ class EventCfg:
         },
     )
 
+    x_range = (0, 0.3)
+    y_range = (-0.2, 0.2)
+
+    reset_cube1_position = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("cube1"),
+            "pose_range": {
+                'x': x_range,
+                'y': y_range,
+                'z': (0.1, 0.1),
+            },
+            "velocity_range": {}
+        },
+    )
+
+    reset_cube2_position = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("cube2"),
+            "pose_range": {
+                'x': x_range,
+                'y': y_range,
+                'z': (0.15, 0.15),
+            },
+            "velocity_range": {}
+        },
+    )
+
 def reward_fn(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
     asset: Articulation = env.scene[asset_cfg.name]
@@ -171,10 +202,12 @@ class RewardsCfg:
 
 class SO101SceneCfg(InteractiveSceneCfg):
     """Designs the scene by spawning ground plane, light, objects and meshes from usd files."""
-    # ground plane
+    # ground plane with physics
     ground = AssetBaseCfg(
         prim_path="/World/ground",
-        spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
+        spawn=sim_utils.GroundPlaneCfg(
+            size=(100.0, 100.0),
+        ),
     )
 
     # cartpole
@@ -184,6 +217,35 @@ class SO101SceneCfg(InteractiveSceneCfg):
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
+    )
+
+    # cube with physics
+    cube1 = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/cube1",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.02, 0.02, 0.02),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props= sim_utils.MassPropertiesCfg(mass=0.1),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+            physics_material=sim_utils.RigidBodyMaterialCfg(),
+            collision_props= sim_utils.CollisionPropertiesCfg(
+                collision_enabled=True,
+            )
+        )
+    )
+
+    cube2 = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/cube2",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.02, 0.02, 0.02),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props= sim_utils.MassPropertiesCfg(mass=0.1),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.2, 0.0)),
+            physics_material=sim_utils.RigidBodyMaterialCfg(),
+            collision_props= sim_utils.CollisionPropertiesCfg(
+                collision_enabled=True,
+            )
+        )
     )
 
 
@@ -207,7 +269,7 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = [0.0, 0.0, 2.0]
         # general settings
         self.decimation = 2
-        self.episode_length_s = 3
+        self.episode_length_s = 5
         # simulation settings
         self.sim.dt = 1 / 60
         self.sim.render_interval = self.decimation
