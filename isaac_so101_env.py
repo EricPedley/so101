@@ -54,7 +54,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import VecNormalize
 
-import datetime
+from datetime import datetime
 import os
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
 
@@ -100,7 +100,8 @@ SO101_CONFIG = ArticulationCfg(
 class ActionsCfg:
     """Action specifications for the environment."""
 
-    joint_efforts = mdp.JointEffortActionCfg(asset_name="robot", joint_names=joint_names, scale=5.0)
+    # joint_efforts = mdp.JointEffortActionCfg(asset_name="robot", joint_names=joint_names, scale=5.0)
+    joint_efforts = mdp.JointPositionActionCfg(asset_name="robot", joint_names=joint_names, scale=1.0)
 
 @configclass
 class TerminationsCfg:
@@ -119,7 +120,6 @@ class ObservationsCfg:
 
         # observation terms (order preserved)
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -134,7 +134,7 @@ class EventCfg:
     """Configuration for events."""
 
     # on reset
-    reset_cart_position = EventTerm(
+    reset_joint_positions = EventTerm(
         func=mdp.reset_joints_by_offset,
         mode="reset",
         params={
@@ -145,24 +145,28 @@ class EventCfg:
     )
 
 def reward_fn(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Penalize joint position deviation from a target value."""
     # extract the used quantities (to enable type-hinting)
     asset: Articulation = env.scene[asset_cfg.name]
-    # wrap the joint positions to (-pi, pi)
-    return torch.tensor(0.0)
+    gripper_index = asset.find_bodies('gripper_link')[0]
+    base_idx = asset.find_bodies('base_link')[0]
+
+    # Get the position in world frame
+    gripper_link_position = asset.data.body_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
+    base_link_position = asset.data.body_pos_w[:, base_idx, :]  # Shape: [num_envs, 3]
+
+    # print(f"Gripper link position: {gripper_link_position.shape}")
+    return gripper_link_position[:,0,2]#-torch.linalg.vector_norm(gripper_link_position - base_link_position - torch.tensor([0.0, 0.0, 1.0], device=env.device))
 
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # (1) Constant running reward
-    alive = RewTerm(func=mdp.is_alive, weight=1.0)
     # (2) Failure penalty
-    terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
+    # terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
     # (3) Primary task: keep pole upright
-    pole_pos = RewTerm(
+    gripper_pos = RewTerm(
         func=reward_fn,
-        weight=-1.0,
+        weight=1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=joint_names)},
     )
 
@@ -204,9 +208,9 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = [0.0, 0.0, 2.0]
         # general settings
         self.decimation = 2
-        self.episode_length_s = 5
+        self.episode_length_s = 3
         # simulation settings
-        self.sim.dt = 1 / 120
+        self.sim.dt = 1 / 60
         self.sim.render_interval = self.decimation
 
 
@@ -222,9 +226,8 @@ def main():
 
     env = Sb3VecEnvWrapper(env)
 
-
     # create agent from stable baselines
-    agent = PPO('MlpPolicy', env, verbose=1)
+    agent = PPO('MlpPolicy', env, verbose=1, device='cpu')
 
     run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_root_path = os.path.abspath(os.path.join("logs", "sb3", 'so101'))
@@ -234,8 +237,8 @@ def main():
     log_dir = os.path.join(log_root_path, run_info)
     new_logger = configure(log_dir, ["stdout", "tensorboard"])
     agent.set_logger(new_logger)
-    checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
-    agent.learn(total_timesteps=100_000, callback=checkpoint_callback)
+    checkpoint_callback = CheckpointCallback(save_freq=100, save_path=log_dir, name_prefix="model", verbose=2)
+    agent.learn(total_timesteps=1_000_000, callback=checkpoint_callback, log_interval=1)
    
     env.close()
 
