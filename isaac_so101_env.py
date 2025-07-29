@@ -26,7 +26,7 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import AssetBaseCfg, Articulation, RigidObjectCfg
+from isaaclab.assets import AssetBaseCfg, Articulation, RigidObjectCfg, RigidObject
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sim import SimulationCfg, SimulationContext
 import isaacsim.core.utils.prims as prim_utils
@@ -88,8 +88,8 @@ SO101_CONFIG = ArticulationCfg(
     actuators={
         'defualt_config': ImplicitActuatorCfg(
             joint_names_expr=joint_names,
-            effort_limit_sim=1.0,
-            velocity_limit_sim=1.0,
+            effort_limit_sim=10.0,
+            velocity_limit_sim=2.0,
             stiffness=10000.0,
             damping=100.0,
         ) 
@@ -100,8 +100,7 @@ SO101_CONFIG = ArticulationCfg(
 class ActionsCfg:
     """Action specifications for the environment."""
 
-    # joint_efforts = mdp.JointEffortActionCfg(asset_name="robot", joint_names=joint_names, scale=5.0)
-    joint_efforts = mdp.JointPositionActionCfg(asset_name="robot", joint_names=joint_names, scale=1.0)
+    joint_efforts = mdp.JointPositionToLimitsActionCfg(asset_name="robot", joint_names=joint_names, scale=1.0)
 
 @configclass
 class TerminationsCfg:
@@ -119,7 +118,7 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
+        # joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
 
         cube1_pos = ObsTerm(
             func=mdp.root_pos_w,
@@ -139,7 +138,7 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
-x_range = (0, 0.3)
+x_range = (0.1, 0.3)
 y_range = (-0.2, 0.2)
 
 @configclass
@@ -185,17 +184,17 @@ class EventCfg:
         },
     )
 
-def reward_fn(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+def reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
-    asset: Articulation = env.scene[asset_cfg.name]
-    gripper_index = asset.find_bodies('gripper_link')[0]
-    base_idx = asset.find_bodies('base_link')[0]
+    robot_asset: Articulation = env.scene['robot']
+    gripper_index = robot_asset.find_bodies('gripper_link')[0]
+    cube_asset: RigidObject = env.scene['cube1']
+    cube_position = cube_asset.data.body_link_pos_w[:, 0, :]  # Shape: [num_envs, 3]
 
     # Get the position in world frame
-    gripper_link_position = asset.data.body_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
-    base_link_position = asset.data.body_pos_w[:, base_idx, :]  # Shape: [num_envs, 3]
+    gripper_link_position = robot_asset.data.body_link_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
 
-    return -torch.linalg.vector_norm(gripper_link_position - base_link_position - torch.tensor([0.0, 0.0, 1.0], device=env.device))
+    return -torch.linalg.vector_norm(gripper_link_position - cube_position)
 
 @configclass
 class RewardsCfg:
@@ -206,10 +205,10 @@ class RewardsCfg:
     # (3) Primary task: keep pole upright
     gripper_pos = RewTerm(
         func=reward_fn,
-        weight=1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=joint_names)},
+        weight=1.0
     )
 
+cube_size = 0.03
 class SO101SceneCfg(InteractiveSceneCfg):
     """Designs the scene by spawning ground plane, light, objects and meshes from usd files."""
     # ground plane with physics
@@ -233,7 +232,7 @@ class SO101SceneCfg(InteractiveSceneCfg):
     cube1 = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/cube1",
         spawn=sim_utils.CuboidCfg(
-            size=(0.02, 0.02, 0.02),
+            size=(cube_size, cube_size, cube_size),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
             mass_props= sim_utils.MassPropertiesCfg(mass=0.1),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
@@ -247,7 +246,7 @@ class SO101SceneCfg(InteractiveSceneCfg):
     cube2 = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/cube2",
         spawn=sim_utils.CuboidCfg(
-            size=(0.02, 0.02, 0.02),
+            size=(cube_size, cube_size, cube_size),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
             mass_props= sim_utils.MassPropertiesCfg(mass=0.1),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.2, 0.0)),
@@ -309,7 +308,7 @@ def main():
     new_logger = configure(log_dir, ["stdout", "tensorboard"])
     agent.set_logger(new_logger)
     checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
-    agent.learn(total_timesteps=10_000_000, callback=checkpoint_callback, log_interval=1)
+    agent.learn(total_timesteps=100_000_000, callback=checkpoint_callback, log_interval=1)
    
     env.close()
 
