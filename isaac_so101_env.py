@@ -37,6 +37,8 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 import isaacsim.core.utils.stage as stage_utils
 import torch
 
+from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+
 from pathlib import Path
 from isaaclab.utils import configclass
 import isaaclab.envs.mdp as mdp
@@ -57,6 +59,9 @@ from stable_baselines3.common.vec_env import VecNormalize
 from datetime import datetime
 import os
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
+import skrl
+from isaaclab_rl.skrl import SkrlVecEnvWrapper
+from skrl.utils.runner.torch import Runner
 
 so101_usd_path = Path(__file__).parent / 'models/SO101/so101_new_calib/so101_new_calib.usd'
 
@@ -88,9 +93,9 @@ SO101_CONFIG = ArticulationCfg(
     actuators={
         'defualt_config': ImplicitActuatorCfg(
             joint_names_expr=joint_names,
-            effort_limit_sim=10.0,
-            velocity_limit_sim=2.0,
-            stiffness=10000.0,
+            effort_limit_sim=2.9, # 30 kg-cm ~= 2.9 Nm
+            velocity_limit_sim=4.3, # 0.24 s / 60 deg ~= 4.3 rad/s
+            stiffness=10000.0, # default values from tutorial
             damping=100.0,
         ) 
     },
@@ -129,6 +134,9 @@ class ObservationsCfg:
             func=mdp.root_pos_w,
             params={"asset_cfg": SceneEntityCfg("cube2")},
         )
+
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -187,14 +195,15 @@ class EventCfg:
 def reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
     robot_asset: Articulation = env.scene['robot']
-    gripper_index = robot_asset.find_bodies('gripper_link')[0]
+    gripper_index = robot_asset.find_bodies('gripper_link')[0][0]
     cube_asset: RigidObject = env.scene['cube1']
     cube_position = cube_asset.data.body_link_pos_w[:, 0, :]  # Shape: [num_envs, 3]
 
     # Get the position in world frame
     gripper_link_position = robot_asset.data.body_link_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
 
-    return -torch.linalg.vector_norm(gripper_link_position - cube_position)
+    ret = -torch.linalg.vector_norm(gripper_link_position - cube_position, axis=1)
+    return ret
 
 @configclass
 class RewardsCfg:
@@ -203,10 +212,12 @@ class RewardsCfg:
     # (2) Failure penalty
     # terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
     # (3) Primary task: keep pole upright
-    gripper_pos = RewTerm(
+    gripper_position = RewTerm(
         func=reward_fn,
         weight=1.0
     )
+
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
 
 cube_size = 0.03
 class SO101SceneCfg(InteractiveSceneCfg):
@@ -293,22 +304,28 @@ def main():
     env_cfg.sim.create_stage_in_memory = True
     # setup base environment
     env = ManagerBasedRLEnv(cfg=env_cfg)
-
-    env = Sb3VecEnvWrapper(env)
-
-    # create agent from stable baselines
-    agent = PPO('MlpPolicy', env, verbose=1, device='cpu')
-
     run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_root_path = os.path.abspath(os.path.join("logs", "sb3", 'so101'))
-    print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
-    print(f"Exact experiment name requested from command line: {run_info}")
     log_dir = os.path.join(log_root_path, run_info)
-    new_logger = configure(log_dir, ["stdout", "tensorboard"])
-    agent.set_logger(new_logger)
-    checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
-    agent.learn(total_timesteps=100_000_000, callback=checkpoint_callback, log_interval=1)
+    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    print(f"Exact experiment name requested from command line: {run_info}")
+
+    env = SkrlVecEnvWrapper(env)
+    runner = Runner(
+        env = env,
+        cfg = Runner.load_cfg_from_yaml('skrl_config.yaml'),
+    )
+
+    runner.run()
+
+
+    # env = Sb3VecEnvWrapper(env)
+    # # create agent from stable baselines
+    # agent = PPO('MlpPolicy', env, verbose=1, device='cpu')
+    # new_logger = configure(log_dir, ["stdout", "tensorboard"])
+    # agent.set_logger(new_logger)
+    # checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
+    # agent.learn(total_timesteps=100_000_000, callback=checkpoint_callback, log_interval=1)
    
     env.close()
 

@@ -65,7 +65,7 @@ agent:
   time_limit_bootstrap: False
   # logging and checkpoint
   experiment:
-    directory: "reach_franka"
+    directory: "so101_ppo"
     experiment_name: ""
     write_interval: auto
     checkpoint_interval: auto
