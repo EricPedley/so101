@@ -212,7 +212,7 @@ def distance_reward_fn(env: ManagerBasedRLEnv, std: float|None) -> torch.Tensor:
     # Get the position in world frame
     gripper_link_position = robot_asset.data.body_link_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
     gripper_link_quat = robot_asset.data.body_link_quat_w[:, gripper_index, :]  # Shape: [num_envs, 4]
-    gripper_to_grasp_local_frame = torch.tile(torch.tensor([[0.1, 0.0, 0.00]], device=gripper_link_position.device), (gripper_link_position.shape[0], 1))
+    gripper_to_grasp_local_frame = torch.tile(torch.tensor([[0.0, 0.0, -0.08]], device=gripper_link_position.device), (gripper_link_position.shape[0], 1))
     grasp_location = gripper_link_position + quat_apply(gripper_link_quat, gripper_to_grasp_local_frame)
 
     distance = torch.linalg.vector_norm(grasp_location - cube_position, axis=1)
@@ -235,6 +235,14 @@ def orientation_reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
     ret = (transformed_vector @ torch.tensor([0.0,0.0,1.0], device=gripper_link_quat.device)) ** 2
     return ret
 
+def cube_height_reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Reward for the cube height."""
+    # extract the used quantities (to enable type-hinting)
+    cube_asset: RigidObject = env.scene['cube1']
+    cube_height = cube_asset.data.root_pos_w[:, 2]  # Shape: [num_envs]
+    # reward is the height of the cube
+    return cube_height
+
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
@@ -247,7 +255,7 @@ class RewardsCfg:
     gripper_position_fine = RewTerm(
         func=distance_reward_fn,
         params={"std": 0.05},
-        weight=5.0
+        weight=10.0
     )
 
     # gripper_orientation_fine = RewTerm(
@@ -255,7 +263,7 @@ class RewardsCfg:
     #     weight=3.0
     # )
 
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-3)
 
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
@@ -263,10 +271,15 @@ class RewardsCfg:
         weight=-1e-4,
     )
 
-    joint_effort = RewTerm(
-        func=mdp.joint_effort,
+    arm_joint_effort = RewTerm(
+        func=mdp.joint_torques_l2,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=list(filter(lambda x: x != 'gripper', joint_names)))},
-        weight=-1e-3,
+        weight=-1e-1,
+    )
+
+    cube_height = RewTerm(
+        func=cube_height_reward_fn,
+        weight=1.0,
     )
 
 @configclass
@@ -279,6 +292,14 @@ class CurriculumCfg:
 
     joint_vel = CurrTerm(
         func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -1e-1, "num_steps": 10000}
+    )
+
+    arm_joint_effort = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "arm_joint_effort", "weight": -1, "num_steps": 10000}
+    )
+
+    cube_height_increase = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "cube_height", "weight": 10, "num_steps": 10000}
     )
 
 cube_size = 0.03
@@ -351,11 +372,18 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.eye = [4.5, 0.0, 6.0]
         self.viewer.lookat = [0.0, 0.0, 2.0]
         # general settings
-        self.decimation = 2
-        self.episode_length_s = 5
+        self.decimation = 3
+        self.episode_length_s = 10
         # simulation settings
         self.sim.dt = 1 / 60
-        self.sim.render_interval = self.decimation
+        self.sim.render_interval = 2
+
+        # copied from isaac lab franka arm stack example
+        self.sim.physx.bounce_threshold_velocity = 0.2
+        self.sim.physx.bounce_threshold_velocity = 0.01
+        self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
+        self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
+        self.sim.physx.friction_correlation_distance = 0.00625
 
 
 def main():
