@@ -65,7 +65,7 @@ import skrl
 from isaaclab_rl.skrl import SkrlVecEnvWrapper
 from skrl.utils.runner.torch import Runner
 
-from isaaclab.utils.math import quat_error_magnitude
+from isaaclab.utils.math import quat_apply
 
 so101_usd_path = Path(__file__).parent / 'models/SO101/so101_new_calib/so101_new_calib.usd'
 
@@ -84,9 +84,6 @@ SO101_CONFIG = ArticulationCfg(
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
         ),
-        collision_props=sim_utils.CollisionPropertiesCfg(
-            collision_enabled=True,
-        ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=0
         ),
@@ -98,7 +95,7 @@ SO101_CONFIG = ArticulationCfg(
         pos=(0.0, 0.0, 0.0),
     ),
     actuators={
-        'defualt_config': ImplicitActuatorCfg(
+        'default_config': ImplicitActuatorCfg(
             joint_names_expr=joint_names,
             effort_limit_sim=2.9, # 30 kg-cm ~= 2.9 Nm
             velocity_limit_sim=4.3, # 0.24 s / 60 deg ~= 4.3 rad/s
@@ -205,7 +202,7 @@ class EventCfg:
         },
     )
 
-def distance_reward_fn(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
+def distance_reward_fn(env: ManagerBasedRLEnv, std: float|None) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
     robot_asset: Articulation = env.scene['robot']
     gripper_index = robot_asset.find_bodies('gripper_link')[0][0]
@@ -214,22 +211,29 @@ def distance_reward_fn(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
 
     # Get the position in world frame
     gripper_link_position = robot_asset.data.body_link_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
+    gripper_link_quat = robot_asset.data.body_link_quat_w[:, gripper_index, :]  # Shape: [num_envs, 4]
+    gripper_to_grasp_local_frame = torch.tile(torch.tensor([[0.1, 0.0, 0.00]], device=gripper_link_position.device), (gripper_link_position.shape[0], 1))
+    grasp_location = gripper_link_position + quat_apply(gripper_link_quat, gripper_to_grasp_local_frame)
 
-    distance = -torch.linalg.vector_norm(gripper_link_position - cube_position, axis=1)
+    distance = torch.linalg.vector_norm(grasp_location - cube_position, axis=1)
+    if std is None:
+        return -distance
     ret = (1 - torch.tanh(distance / std))
     return ret
 
 def orientation_reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
-    # extract the used quantities (to enable type-hinting)
+    # keep the gripper sideways
     robot_asset: Articulation = env.scene['robot']
     gripper_index = robot_asset.find_bodies('gripper_link')[0][0]
     cube_asset: RigidObject = env.scene['cube1']
-    cube_quat = cube_asset.data.body_link_quat_w[:, 0, :]  # Shape: [num_envs, 4]
 
-    # Get the orientation in world frame
-    gripper_link_quat = robot_asset.data.body_link_quat_w[:, gripper_index, :]  # Shape: [num_envs, 4]
+    # get transformed (0,1,0) vector and use dot product with (0,0,1) vector to get reward
 
-    return quat_error_magnitude(gripper_link_quat, cube_quat)
+    gripper_link_quat = robot_asset.data.body_link_quat_w[:, gripper_index, :]  # Shape: [num_envs, 4] 
+    y_axis_vecs = torch.tile(torch.tensor([[0.0, 0.1, 0.0]], device=gripper_link_quat.device), (gripper_link_quat.shape[0], 1))
+    transformed_vector = quat_apply(gripper_link_quat, y_axis_vecs)
+    ret = (transformed_vector @ torch.tensor([0.0,0.0,1.0], device=gripper_link_quat.device)) ** 2
+    return ret
 
 @configclass
 class RewardsCfg:
@@ -246,10 +250,10 @@ class RewardsCfg:
         weight=5.0
     )
 
-    gripper_orientation_fine = RewTerm(
-        func=orientation_reward_fn,
-        weight=3.0
-    )
+    # gripper_orientation_fine = RewTerm(
+    #     func=orientation_reward_fn,
+    #     weight=3.0
+    # )
 
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
 
@@ -257,6 +261,12 @@ class RewardsCfg:
         func=mdp.joint_vel_l2,
         params={"asset_cfg": SceneEntityCfg("robot")},
         weight=-1e-4,
+    )
+
+    joint_effort = RewTerm(
+        func=mdp.joint_effort,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=list(filter(lambda x: x != 'gripper', joint_names)))},
+        weight=-1e-3,
     )
 
 @configclass
