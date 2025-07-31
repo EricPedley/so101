@@ -44,6 +44,7 @@ from isaaclab.utils import configclass
 import isaaclab.envs.mdp as mdp
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -63,6 +64,8 @@ import skrl
 from isaaclab_rl.skrl import SkrlVecEnvWrapper
 from skrl.utils.runner.torch import Runner
 
+from isaaclab.utils.math import quat_error_magnitude
+
 so101_usd_path = Path(__file__).parent / 'models/SO101/so101_new_calib/so101_new_calib.usd'
 
 joint_names = [
@@ -78,7 +81,10 @@ SO101_CONFIG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=str(so101_usd_path),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=True,
+            disable_gravity=False,
+        ),
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            collision_enabled=True,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=0
@@ -123,15 +129,21 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        # joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
 
         cube1_pos = ObsTerm(
             func=mdp.root_pos_w,
             params={"asset_cfg": SceneEntityCfg("cube1")},
         )
-
         cube2_pos = ObsTerm(
             func=mdp.root_pos_w,
+            params={"asset_cfg": SceneEntityCfg("cube2")},
+        )
+        cube1_quat = ObsTerm(
+            func=mdp.root_quat_w,
+            params={"asset_cfg": SceneEntityCfg("cube1")},
+        )
+        cube2_quat = ObsTerm(
+            func=mdp.root_quat_w,
             params={"asset_cfg": SceneEntityCfg("cube2")},
         )
 
@@ -192,7 +204,7 @@ class EventCfg:
         },
     )
 
-def reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
+def distance_reward_fn(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
     robot_asset: Articulation = env.scene['robot']
     gripper_index = robot_asset.find_bodies('gripper_link')[0][0]
@@ -202,22 +214,61 @@ def reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
     # Get the position in world frame
     gripper_link_position = robot_asset.data.body_link_pos_w[:, gripper_index, :]  # Shape: [num_envs, 3]
 
-    ret = -torch.linalg.vector_norm(gripper_link_position - cube_position, axis=1)
+    distance = -torch.linalg.vector_norm(gripper_link_position - cube_position, axis=1)
+    ret = (1 - torch.tanh(distance / std))
     return ret
+
+def orientation_reward_fn(env: ManagerBasedRLEnv) -> torch.Tensor:
+    # extract the used quantities (to enable type-hinting)
+    robot_asset: Articulation = env.scene['robot']
+    gripper_index = robot_asset.find_bodies('gripper_link')[0][0]
+    cube_asset: RigidObject = env.scene['cube1']
+    cube_quat = cube_asset.data.body_link_quat_w[:, 0, :]  # Shape: [num_envs, 4]
+
+    # Get the orientation in world frame
+    gripper_link_quat = robot_asset.data.body_link_quat_w[:, gripper_index, :]  # Shape: [num_envs, 4]
+
+    return quat_error_magnitude(gripper_link_quat, cube_quat)
 
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
-
-    # (2) Failure penalty
-    # terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
-    # (3) Primary task: keep pole upright
-    gripper_position = RewTerm(
-        func=reward_fn,
-        weight=1.0
+    gripper_position_coarse = RewTerm(
+        func=distance_reward_fn,
+        params={"std": 0.3},
+        weight=16.0
     )
 
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
+    gripper_position_fine = RewTerm(
+        func=distance_reward_fn,
+        params={"std": 0.05},
+        weight=5.0
+    )
+
+    gripper_orientation_fine = RewTerm(
+        func=orientation_reward_fn,
+        weight=3.0
+    )
+
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+
+    joint_vel = RewTerm(
+        func=mdp.joint_vel_l2,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+        weight=-1e-4,
+    )
+
+@configclass
+class CurriculumCfg:
+    """Curriculum terms for the MDP."""
+
+    action_rate = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-1, "num_steps": 10000}
+    )
+
+    joint_vel = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -1e-1, "num_steps": 10000}
+    )
 
 cube_size = 0.03
 class SO101SceneCfg(InteractiveSceneCfg):
@@ -281,6 +332,7 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
     events = EventCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         """Post initialization."""
