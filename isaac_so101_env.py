@@ -17,6 +17,7 @@ from isaaclab.app import AppLauncher
 # create argparser
 parser = argparse.ArgumentParser(description="Tutorial on creating an empty stage.")
 parser.add_argument("--num_envs", type=int, default=16, help="Number of environments to spawn.")
+parser.add_argument("--load_checkpoint", type=str, default=None, help="Number of environments to spawn.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -353,6 +354,7 @@ def main():
     env_cfg = SO101EnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
+    checkpoint_path = args_cli.load_checkpoint
     env_cfg.sim.create_stage_in_memory = True
     # setup base environment
     env = ManagerBasedRLEnv(cfg=env_cfg)
@@ -367,6 +369,9 @@ def main():
         env = env,
         cfg = Runner.load_cfg_from_yaml('skrl_config.yaml'),
     )
+
+    if checkpoint_path is not None:
+        runner.agent.load(checkpoint_path)
 
     runner.run()
 
