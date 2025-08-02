@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(so101_moveit_control)
+project(so101_description)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -24,13 +24,7 @@ if(BUILD_TESTING)
 endif()
 
 install(FILES
-  so101.srdf
-  moveit_controllers.yaml
-  DESTINATION share/${PROJECT_NAME}/
-)
-
-install(DIRECTORY
-  launch
+  so101_new_calib.urdf
   DESTINATION share/${PROJECT_NAME}/
 )
 
