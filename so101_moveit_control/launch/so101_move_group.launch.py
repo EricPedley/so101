@@ -37,7 +37,12 @@ def generate_launch_description():
     }
 
     moveit_controllers = {
-        'moveit_simple_controller_manager': load_yaml('so101_moveit_control', 'moveit_controllers.yaml'),
+        'moveit_simple_controller_manager.controller_names': ['arm_controller'],
+        'moveit_simple_controller_manager.arm_controller.name': 'arm_controller',
+        'moveit_simple_controller_manager.arm_controller.action_ns': 'follow_joint_trajectory',
+        'moveit_simple_controller_manager.arm_controller.type': 'FollowJointTrajectory',
+        'moveit_simple_controller_manager.arm_controller.allowed_execution_duration_scaling': 1.2,
+        'moveit_simple_controller_manager.arm_controller.allowed_goal_duration_margin': 0.5,
         'moveit_controller_manager': 'moveit_simple_controller_manager/MoveItSimpleControllerManager'
     }
         

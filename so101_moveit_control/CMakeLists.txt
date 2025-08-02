@@ -25,7 +25,6 @@ endif()
 
 install(FILES
   so101.srdf
-  moveit_controllers.yaml
   DESTINATION share/${PROJECT_NAME}/
 )
 
