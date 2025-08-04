@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug ORB-SLAM3 IMU Mono Node",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/home/miller/code/so101/ros_ws/build/orb_slam3_ros2/imu_mono_node_cpp",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set disassembly-flavor to intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "",
+            "postDebugTask": ""
+        }
+    ]
+}
