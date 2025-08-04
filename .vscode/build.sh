@@ -1,0 +1,2 @@
+source /home/miller/code/so101/ros_ws/install/setup.bash
+colcon build --packages-select orb_slam3_ros2 --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOpenCV_DIR=/usr/lib/x86_64-linux-gnu/cmake/opencv4

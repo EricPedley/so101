@@ -4,14 +4,7 @@
         {
             "label": "build-orb-slam3",
             "type": "shell",
-            "command": "colcon",
-            "args": [
-                "build",
-                "--packages-select",
-                "orb_slam3_ros2",
-                "--cmake-args",
-                "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
-            ],
+            "command": "/home/miller/code/so101/.vscode/build.sh",
             "group": {
                 "kind": "build",
                 "isDefault": true

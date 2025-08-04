@@ -22,7 +22,7 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "",
+            "preLaunchTask": "build-orb-slam3",
             "postDebugTask": ""
         }
     ]
